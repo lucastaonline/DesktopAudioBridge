@@ -1,7 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Log.h"
-#include <windows.h>
 
 namespace
 {
@@ -28,15 +27,6 @@ BridgeProcessor::BridgeProcessor()
     apvts.state.setProperty("deviceName", "", nullptr);
 
     dab::log("processor: created");
-    {
-        // Windows 11 may throttle a backgrounded host (EcoQoS); opt out so audio keeps running.
-        PROCESS_POWER_THROTTLING_STATE st {};
-        st.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
-        st.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
-        st.StateMask = 0;
-        const BOOL ok = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &st, sizeof(st));
-        dab::log(juce::String("processor: disable power throttling ") + (ok ? "ok" : "failed"));
-    }
     stats.tick = [this]
     {
         const auto wc = ring.writeCount.load();
