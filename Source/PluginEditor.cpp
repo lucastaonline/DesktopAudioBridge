@@ -4,9 +4,11 @@ BridgeEditor::BridgeEditor(BridgeProcessor& p)
     : AudioProcessorEditor(&p), proc(p),
       gainAttach(p.apvts, "gain", gainSlider),
       bufferAttach(p.apvts, "bufferMs", bufferSlider),
-      muteAttach(p.apvts, "mute", muteButton)
+      muteAttach(p.apvts, "mute", muteButton),
+      autoAttach(p.apvts, "autoBuffer", autoButton)
 {
-    setSize(420, 260);
+    setSize(420, 290);
+    addAndMakeVisible(autoButton);
 
     addAndMakeVisible(deviceLabel);
     addAndMakeVisible(deviceBox);
@@ -69,6 +71,7 @@ void BridgeEditor::deviceChosen()
 void BridgeEditor::timerCallback()
 {
     const float peak = proc.getMeterPeak();
+    bufferSlider.setEnabled(proc.apvts.getRawParameterValue("autoBuffer")->load() < 0.5f);
     meterLevel = peak > meterLevel ? peak : meterLevel * 0.85f;
 
     if (++tickCount % 30 == 0)
@@ -86,8 +89,9 @@ void BridgeEditor::timerCallback()
         col = juce::Colours::lightgrey;
     }
     else if (proc.getCaptureStatus() == dab::CaptureStatus::Running)
-        msg = juce::String::formatted("Capturing | fill %.0f ms | underruns %d | resyncs %d",
-                                      (double) proc.fillMs.load(), proc.underruns.load(), proc.resyncs.load());
+        msg = juce::String::formatted("Capturing | buffer %.0f ms | fill %.0f ms | underruns %d | resyncs %d",
+                                      (double) proc.effectiveMs.load(), (double) proc.fillMs.load(),
+                                      proc.underruns.load(), proc.resyncs.load());
     else
     {
         msg = "WARNING: device unavailable - retrying...";
@@ -136,6 +140,7 @@ void BridgeEditor::resized()
     bufferSlider.setBounds(b);
     r.removeFromTop(4);
     muteButton.setBounds(r.removeFromTop(26));
+    autoButton.setBounds(r.removeFromTop(26));
     r.removeFromTop(6);
     meterArea = r.removeFromTop(16);
 }

@@ -39,7 +39,7 @@ public:
     dab::CaptureStatus getCaptureStatus() const noexcept { return capture.getStatus(); }
     float getMeterPeak() const noexcept { return meterPeak.load(); }
     std::atomic<int> underruns { 0 }, resyncs { 0 };
-    std::atomic<float> fillMs { 0.0f };
+    std::atomic<float> fillMs { 0.0f }, effectiveMs { 0.0f };
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -53,6 +53,8 @@ private:
     std::atomic<float>* gainDb = nullptr;
     std::atomic<float>* muteParam = nullptr;
     std::atomic<float>* bufferMs = nullptr;
+    std::atomic<float>* autoBuffer = nullptr;
+    double autoMs = 25.0, cleanSeconds = 0.0, shrinkInterval = 5.0;
 
     // Audio-thread state
     double hostRate = 48000.0;

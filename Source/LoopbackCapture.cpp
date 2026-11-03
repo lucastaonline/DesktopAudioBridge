@@ -121,10 +121,20 @@ void LoopbackCapture::run()
 {
     ComScope com;
     timeBeginPeriod(1); // default 15.6 ms timer granularity would make polling bursty
-    runCapture();
-    timeEndPeriod(1);
-    if (status.load() == (int) CaptureStatus::Running)
+    // Keep retrying on its own (device removed, format/default change, sleep/wake)
+    // so recovery never depends on the editor being open.
+    while (! threadShouldExit())
+    {
+        runCapture();
+        if (threadShouldExit()) break;
         status.store((int) CaptureStatus::Unavailable);
+        ring.deviceRate.store(0.0);
+        for (int i = 0; i < 20 && ! threadShouldExit(); ++i)
+            juce::Thread::sleep(100);
+        ring.startCount.store(ring.writeCount.load());
+        ring.generation.fetch_add(1);
+    }
+    timeEndPeriod(1);
 }
 
 void LoopbackCapture::runCapture()

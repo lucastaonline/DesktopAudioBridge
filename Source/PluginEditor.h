@@ -26,7 +26,7 @@ private:
 
     juce::Slider gainSlider, bufferSlider;
     juce::Label gainLabel { {}, "Gain (dB)" }, bufferLabel { {}, "Buffer (ms)" };
-    juce::ToggleButton muteButton { "Mute" };
+    juce::ToggleButton muteButton { "Mute" }, autoButton { "Auto buffer (smallest glitch-free)" };
 
     std::vector<dab::DeviceInfo> devices;
     float meterLevel = 0.0f;
@@ -35,7 +35,7 @@ private:
     bool updatingBox = false;
 
     juce::AudioProcessorValueTreeState::SliderAttachment gainAttach, bufferAttach;
-    juce::AudioProcessorValueTreeState::ButtonAttachment muteAttach;
+    juce::AudioProcessorValueTreeState::ButtonAttachment muteAttach, autoAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BridgeEditor)
 };

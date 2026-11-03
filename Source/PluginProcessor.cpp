@@ -21,6 +21,7 @@ BridgeProcessor::BridgeProcessor()
     gainDb = apvts.getRawParameterValue("gain");
     muteParam = apvts.getRawParameterValue("mute");
     bufferMs = apvts.getRawParameterValue("bufferMs");
+    autoBuffer = apvts.getRawParameterValue("autoBuffer");
     apvts.state.setProperty("deviceId", "", nullptr);
     apvts.state.setProperty("deviceName", "", nullptr);
 }
@@ -35,6 +36,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BridgeProcessor::createLayou
                                                      NormalisableRange<float>(-60.0f, 12.0f, 0.1f), 0.0f,
                                                      AudioParameterFloatAttributes().withLabel("dB")));
     layout.add(std::make_unique<AudioParameterBool>(ParameterID { "mute", 1 }, "Mute", false));
+    layout.add(std::make_unique<AudioParameterBool>(ParameterID { "autoBuffer", 1 }, "Auto buffer", true));
     layout.add(std::make_unique<AudioParameterFloat>(ParameterID { "bufferMs", 1 }, "Buffer",
                                                      NormalisableRange<float>(10.0f, 250.0f, 1.0f), 50.0f,
                                                      AudioParameterFloatAttributes().withLabel("ms")));
@@ -85,7 +87,13 @@ void BridgeProcessor::renderBridge(int n, float* l, float* r)
     }
 
     const int64_t w = ring.writeCount.load(std::memory_order_acquire);
-    const double target = juce::jmax(64.0, (double) bufferMs->load() * 0.001 * devRate);
+    const double blockMs = (double) n / hostRate * 1000.0;
+    const double floorMs = 12.0 + 2.0 * blockMs;
+    const bool autoOn = autoBuffer->load() > 0.5f;
+    if (autoMs < floorMs) autoMs = juce::jmax(floorMs, 25.0);
+    const double targetMs = autoOn ? autoMs : (double) bufferMs->load();
+    effectiveMs.store((float) targetMs);
+    const double target = juce::jmax(64.0, targetMs * 0.001 * devRate);
 
     if (! playing)
     {
@@ -108,6 +116,14 @@ void BridgeProcessor::renderBridge(int n, float* l, float* r)
     }
     fillMs.store((float) (fill / devRate * 1000.0));
 
+    // Auto mode: probe downwards slowly while glitch-free, back off on underrun.
+    cleanSeconds += (double) n / hostRate;
+    if (autoOn && cleanSeconds > shrinkInterval)
+    {
+        autoMs = juce::jmax(floorMs, autoMs - 1.0);
+        cleanSeconds = 0.0;
+    }
+
     smoothFill += 0.1 * (fill - smoothFill);
     const double err = (smoothFill - target) / target;
     const double desired = juce::jlimit(-0.02, 0.02, err * 0.02);
@@ -122,6 +138,12 @@ void BridgeProcessor::renderBridge(int n, float* l, float* r)
         {
             playing = false; // underrun: re-prime
             underruns++;
+            if (autoOn)
+            {
+                autoMs = juce::jmin(250.0, autoMs * 1.3 + 2.0);
+                shrinkInterval = juce::jmin(120.0, shrinkInterval * 1.5);
+            }
+            cleanSeconds = 0.0;
             primeBase = -1;
             return;
         }
