@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Log.h"
+#include <windows.h>
 
 namespace
 {
@@ -27,6 +28,15 @@ BridgeProcessor::BridgeProcessor()
     apvts.state.setProperty("deviceName", "", nullptr);
 
     dab::log("processor: created");
+    {
+        // Windows 11 may throttle a backgrounded host (EcoQoS); opt out so audio keeps running.
+        PROCESS_POWER_THROTTLING_STATE st {};
+        st.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+        st.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+        st.StateMask = 0;
+        const BOOL ok = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &st, sizeof(st));
+        dab::log(juce::String("processor: disable power throttling ") + (ok ? "ok" : "failed"));
+    }
     stats.tick = [this]
     {
         const auto wc = ring.writeCount.load();
@@ -35,12 +45,12 @@ BridgeProcessor::BridgeProcessor()
         const auto bc = blockCalls.load();
         const juce::String line = juce::String::formatted(
             "stats: status=%d devRate=%.0f frames+=%lld packets+=%lld heartbeat+=%lld idleEv=%lld disc=%lld "
-            "blocks+=%lld blockSize=%d playing=%d fill=%.1fms buf=%.0fms underruns=%d resyncs=%d peak=%.3f%s",
+            "blocks+=%lld blockSize=%d playing=%d fill=%.1fms buf=%.0fms underruns=%d resyncs=%d peak=%.3f",
             (int) capture.getStatus(), ring.deviceRate.load(), (long long) (wc - lastWc), (long long) (pk - lastPk),
             (long long) (hb - lastHb), (long long) capture.idleEvents.load(), (long long) capture.discontinuities.load(),
             (long long) (bc - lastBc), lastBlock.load(), playingFlag.load(), (double) fillMs.load(),
-            (double) effectiveMs.load(), underruns.load(), resyncs.load(), (double) meterPeak.load(),
-            (bc == lastBc ? "  <-- host not calling processBlock" : ""));
+            (double) effectiveMs.load(), underruns.load(), resyncs.load(), (double) meterPeak.load())
+            + (bc == lastBc ? juce::String("  <-- host not calling processBlock") : juce::String());
         lastWc = wc; lastPk = pk; lastHb = hb; lastBc = bc;
         if (getDeviceId().isNotEmpty())
             dab::log(line);
