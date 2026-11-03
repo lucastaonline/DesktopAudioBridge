@@ -38,6 +38,8 @@ public:
     void retryIfUnavailable();
     dab::CaptureStatus getCaptureStatus() const noexcept { return capture.getStatus(); }
     float getMeterPeak() const noexcept { return meterPeak.load(); }
+    std::atomic<int> underruns { 0 }, resyncs { 0 };
+    std::atomic<float> fillMs { 0.0f };
 
     juce::AudioProcessorValueTreeState apvts;
 

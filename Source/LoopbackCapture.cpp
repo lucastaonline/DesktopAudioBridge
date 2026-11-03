@@ -4,6 +4,8 @@
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <cmath>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 
 namespace dab
 {
@@ -118,7 +120,9 @@ void LoopbackCapture::stop()
 void LoopbackCapture::run()
 {
     ComScope com;
+    timeBeginPeriod(1); // default 15.6 ms timer granularity would make polling bursty
     runCapture();
+    timeEndPeriod(1);
     if (status.load() == (int) CaptureStatus::Running)
         status.store((int) CaptureStatus::Unavailable);
 }
@@ -167,6 +171,7 @@ void LoopbackCapture::runCapture()
     auto lastTick = juce::Time::getHighResolutionTicks();
     const double tickHz = (double) juce::Time::getHighResolutionTicksPerSecond();
     double silenceDebt = 0.0;
+    double idleSeconds = 0.0;
 
     while (! threadShouldExit())
     {
@@ -182,14 +187,18 @@ void LoopbackCapture::runCapture()
 
         if (packet == 0)
         {
-            // Loopback delivers nothing while the endpoint is silent: keep the
-            // ring flowing with silence so the reader's clock stays continuous.
+            // Loopback delivers nothing while the endpoint is silent. Packets also
+            // arrive in ~10 ms bursts, so only treat a long gap as real silence;
+            // otherwise silence would be interleaved with real audio.
+            idleSeconds += elapsed;
+            if (idleSeconds < 0.03) continue;
             silenceDebt += elapsed * rate;
             const int n = (int) silenceDebt;
             silenceDebt -= n;
             for (int i = 0; i < juce::jmin(n, 48000); ++i) ring.push(0.0f, 0.0f);
             continue;
         }
+        idleSeconds = 0.0;
         silenceDebt = 0.0;
 
         while (packet != 0 && ! threadShouldExit())

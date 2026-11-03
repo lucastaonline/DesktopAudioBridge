@@ -86,7 +86,8 @@ void BridgeEditor::timerCallback()
         col = juce::Colours::lightgrey;
     }
     else if (proc.getCaptureStatus() == dab::CaptureStatus::Running)
-        msg = "Capturing: " + proc.getDeviceName();
+        msg = juce::String::formatted("Capturing | fill %.0f ms | underruns %d | resyncs %d",
+                                      (double) proc.fillMs.load(), proc.underruns.load(), proc.resyncs.load());
     else
     {
         msg = "WARNING: device unavailable - retrying...";

@@ -101,10 +101,12 @@ void BridgeProcessor::renderBridge(int n, float* l, float* r)
     double fill = (double) w - readPos;
     if (fill > target * 3.0 + devRate * 0.02 || fill > (double) dab::StereoRing::capacity * 0.5)
     {
+        resyncs++;
         readPos = (double) w - target; // far off: hard resync
         fill = target;
         smoothFill = target;
     }
+    fillMs.store((float) (fill / devRate * 1000.0));
 
     smoothFill += 0.1 * (fill - smoothFill);
     const double err = (smoothFill - target) / target;
@@ -119,6 +121,7 @@ void BridgeProcessor::renderBridge(int n, float* l, float* r)
         if (ip + 2 >= w || ip < 1)
         {
             playing = false; // underrun: re-prime
+            underruns++;
             primeBase = -1;
             return;
         }
