@@ -57,6 +57,8 @@ public:
     void stop();
     CaptureStatus getStatus() const noexcept { return (CaptureStatus) status.load(); }
 
+    std::atomic<int64_t> packets { 0 }, heartbeat { 0 }, idleEvents { 0 }, discontinuities { 0 };
+
 private:
     void run() override;
     void runCapture();

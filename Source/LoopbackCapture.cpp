@@ -1,4 +1,5 @@
 #include "LoopbackCapture.h"
+#include "Log.h"
 
 #include <juce_core/juce_core.h>
 #include <mmdeviceapi.h>
@@ -155,13 +156,21 @@ void LoopbackCapture::runCapture()
         safeRelease(en);
     };
 
-    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**) &en))
-        || FAILED(en->GetDevice(deviceId.toWideCharPointer(), &dev))
-        || FAILED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**) &client))
-        || FAILED(client->GetMixFormat(&fmt))
-        || FAILED(client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 2000000, 0, fmt, nullptr))
-        || FAILED(client->GetService(__uuidof(IAudioCaptureClient), (void**) &cap))
-        || FAILED(client->Start()))
+    auto step = [&](HRESULT hr, const char* what)
+    {
+        if (SUCCEEDED(hr)) return true;
+        log(juce::String("capture: ") + what + " failed, hr=0x" + juce::String::toHexString((int) hr));
+        return false;
+    };
+
+    log("capture: opening " + deviceId);
+    if (! step(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**) &en), "CoCreateInstance")
+        || ! step(en->GetDevice(deviceId.toWideCharPointer(), &dev), "GetDevice")
+        || ! step(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**) &client), "Activate")
+        || ! step(client->GetMixFormat(&fmt), "GetMixFormat")
+        || ! step(client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 2000000, 0, fmt, nullptr), "Initialize")
+        || ! step(client->GetService(__uuidof(IAudioCaptureClient), (void**) &cap), "GetService")
+        || ! step(client->Start(), "Start"))
     {
         cleanup();
         return;
@@ -174,6 +183,12 @@ void LoopbackCapture::runCapture()
     if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
         isFloat = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(fmt)->SubFormat.Data1 == WAVE_FORMAT_IEEE_FLOAT;
     const double rate = (double) fmt->nSamplesPerSec;
+    const auto openedRate = fmt->nSamplesPerSec;
+    const auto openedChannels = fmt->nChannels;
+    const auto openedBits = fmt->wBitsPerSample;
+
+    log(juce::String::formatted("capture: running, %u Hz, %d ch, %d bit, float=%d, blockAlign=%d",
+                                (unsigned) openedRate, (int) openedChannels, (int) openedBits, (int) isFloat, frameBytes));
 
     ring.deviceRate.store(rate);
     status.store((int) CaptureStatus::Running);
@@ -182,18 +197,54 @@ void LoopbackCapture::runCapture()
     const double tickHz = (double) juce::Time::getHighResolutionTicksPerSecond();
     double silenceDebt = 0.0;
     double idleSeconds = 0.0;
+    double sinceCheck = 0.0;
+    bool inIdle = false;
 
     while (! threadShouldExit())
     {
         juce::Thread::sleep(4);
+        heartbeat.fetch_add(1);
 
         UINT32 packet = 0;
         HRESULT hr = cap->GetNextPacketSize(&packet);
-        if (FAILED(hr)) break; // e.g. device removed
+        if (FAILED(hr))
+        {
+            log("capture: GetNextPacketSize failed, hr=0x" + juce::String::toHexString((int) hr));
+            break;
+        }
 
         const auto now = juce::Time::getHighResolutionTicks();
         const double elapsed = (double) (now - lastTick) / tickHz;
         lastTick = now;
+        if (elapsed > 0.1)
+            log(juce::String::formatted("capture: loop stalled %.0f ms", elapsed * 1000.0));
+
+        // Once a second: the endpoint must still be active and keep the same mix
+        // format; otherwise the loopback stream can go dead silently.
+        sinceCheck += elapsed;
+        if (sinceCheck >= 1.0)
+        {
+            sinceCheck = 0.0;
+            DWORD state = 0;
+            if (SUCCEEDED(dev->GetState(&state)) && state != DEVICE_STATE_ACTIVE)
+            {
+                log("capture: endpoint no longer active, state=" + juce::String((int) state));
+                break;
+            }
+            IAudioClient* probe = nullptr;
+            WAVEFORMATEX* pf = nullptr;
+            bool changed = false;
+            if (SUCCEEDED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**) &probe))
+                && SUCCEEDED(probe->GetMixFormat(&pf)))
+                changed = pf->nSamplesPerSec != openedRate || pf->nChannels != openedChannels || pf->wBitsPerSample != openedBits;
+            if (pf != nullptr) CoTaskMemFree(pf);
+            safeRelease(probe);
+            if (changed)
+            {
+                log("capture: mix format changed, reopening");
+                break;
+            }
+        }
 
         if (packet == 0)
         {
@@ -202,11 +253,17 @@ void LoopbackCapture::runCapture()
             // otherwise silence would be interleaved with real audio.
             idleSeconds += elapsed;
             if (idleSeconds < 0.03) continue;
+            if (! inIdle) { inIdle = true; idleEvents.fetch_add(1); }
             silenceDebt += elapsed * rate;
             const int n = (int) silenceDebt;
             silenceDebt -= n;
             for (int i = 0; i < juce::jmin(n, 48000); ++i) ring.push(0.0f, 0.0f);
             continue;
+        }
+        if (inIdle)
+        {
+            inIdle = false;
+            log(juce::String::formatted("capture: audio resumed after %.2f s idle", idleSeconds));
         }
         idleSeconds = 0.0;
         silenceDebt = 0.0;
@@ -216,11 +273,15 @@ void LoopbackCapture::runCapture()
             BYTE* p = nullptr;
             UINT32 frames = 0;
             DWORD flags = 0;
-            if (FAILED(cap->GetBuffer(&p, &frames, &flags, nullptr, nullptr)))
+            hr = cap->GetBuffer(&p, &frames, &flags, nullptr, nullptr);
+            if (FAILED(hr))
             {
+                log("capture: GetBuffer failed, hr=0x" + juce::String::toHexString((int) hr));
                 cleanup();
                 return;
             }
+            if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY)
+                discontinuities.fetch_add(1);
 
             const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
             for (UINT32 f = 0; f < frames; ++f)
@@ -231,11 +292,19 @@ void LoopbackCapture::runCapture()
                 const float r = channels > 1 ? readSample(fp + bytes, isFloat, bytes) : l;
                 ring.push(l, r);
             }
+            packets.fetch_add(1);
 
             cap->ReleaseBuffer(frames);
-            if (FAILED(cap->GetNextPacketSize(&packet))) { cleanup(); return; }
+            if (FAILED(cap->GetNextPacketSize(&packet)))
+            {
+                log("capture: GetNextPacketSize (inner) failed");
+                cleanup();
+                return;
+            }
         }
     }
     cleanup();
+    log("capture: stopped");
 }
 } // namespace dab
+

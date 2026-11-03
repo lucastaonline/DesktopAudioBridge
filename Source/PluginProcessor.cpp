@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Log.h"
 
 namespace
 {
@@ -24,9 +25,35 @@ BridgeProcessor::BridgeProcessor()
     autoBuffer = apvts.getRawParameterValue("autoBuffer");
     apvts.state.setProperty("deviceId", "", nullptr);
     apvts.state.setProperty("deviceName", "", nullptr);
+
+    dab::log("processor: created");
+    stats.tick = [this]
+    {
+        const auto wc = ring.writeCount.load();
+        const auto pk = capture.packets.load();
+        const auto hb = capture.heartbeat.load();
+        const auto bc = blockCalls.load();
+        const juce::String line = juce::String::formatted(
+            "stats: status=%d devRate=%.0f frames+=%lld packets+=%lld heartbeat+=%lld idleEv=%lld disc=%lld "
+            "blocks+=%lld blockSize=%d playing=%d fill=%.1fms buf=%.0fms underruns=%d resyncs=%d peak=%.3f%s",
+            (int) capture.getStatus(), ring.deviceRate.load(), (long long) (wc - lastWc), (long long) (pk - lastPk),
+            (long long) (hb - lastHb), (long long) capture.idleEvents.load(), (long long) capture.discontinuities.load(),
+            (long long) (bc - lastBc), lastBlock.load(), playingFlag.load(), (double) fillMs.load(),
+            (double) effectiveMs.load(), underruns.load(), resyncs.load(), (double) meterPeak.load(),
+            (bc == lastBc ? "  <-- host not calling processBlock" : ""));
+        lastWc = wc; lastPk = pk; lastHb = hb; lastBc = bc;
+        if (getDeviceId().isNotEmpty())
+            dab::log(line);
+    };
+    stats.startThread(juce::Thread::Priority::low);
 }
 
-BridgeProcessor::~BridgeProcessor() { capture.stop(); }
+BridgeProcessor::~BridgeProcessor()
+{
+    dab::log("processor: destroyed");
+    stats.stopThread(2000);
+    capture.stop();
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout BridgeProcessor::createLayout()
 {
@@ -46,6 +73,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BridgeProcessor::createLayou
 void BridgeProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     hostRate = sampleRate;
+    dab::log(juce::String::formatted("processor: prepareToPlay rate=%.0f block=%d", sampleRate, samplesPerBlock));
     tmpL.assign((size_t) juce::jmax(1, samplesPerBlock), 0.0f);
     tmpR.assign((size_t) juce::jmax(1, samplesPerBlock), 0.0f);
     gainSmoothed.reset(sampleRate, 0.02);
@@ -161,6 +189,8 @@ void BridgeProcessor::renderBridge(int n, float* l, float* r)
 void BridgeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+    blockCalls.fetch_add(1, std::memory_order_relaxed);
+    lastBlock.store(buffer.getNumSamples(), std::memory_order_relaxed);
     const int numCh = buffer.getNumChannels();
     const int total = buffer.getNumSamples();
 
@@ -191,6 +221,7 @@ void BridgeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         done += n;
     }
     meterPeak.store(peak);
+    playingFlag.store(playing ? 1 : 0, std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* BridgeProcessor::createEditor() { return new BridgeEditor(*this); }
@@ -207,6 +238,7 @@ juce::String BridgeProcessor::getDeviceName() const { return apvts.state.getProp
 
 void BridgeProcessor::restartCapture()
 {
+    dab::log("processor: restartCapture device='" + getDeviceName() + "'");
     capture.stop();
     capture.start(getDeviceId());
 }

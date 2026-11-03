@@ -41,6 +41,24 @@ public:
     std::atomic<int> underruns { 0 }, resyncs { 0 };
     std::atomic<float> fillMs { 0.0f }, effectiveMs { 0.0f };
 
+    struct StatsThread : juce::Thread
+    {
+        StatsThread() : juce::Thread("DAB stats") {}
+        std::function<void()> tick;
+        void run() override
+        {
+            while (! threadShouldExit())
+            {
+                tick();
+                wait(2000);
+            }
+        }
+    };
+    StatsThread stats;
+    int64_t lastWc = 0, lastPk = 0, lastHb = 0, lastBc = 0;
+    std::atomic<int64_t> blockCalls { 0 };
+    std::atomic<int> playingFlag { 0 }, lastBlock { 0 };
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
