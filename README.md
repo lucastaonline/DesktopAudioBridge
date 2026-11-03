@@ -36,6 +36,10 @@ Device dropdown (all active render endpoints), gain (-60..+12 dB), mute, buffer 
 
 Do not route the bridge device to your monitoring output through Windows ("Listen to this device"), or you'll hear it twice.
 
+### Download
+
+Prebuilt `.vst3` zips are on the [Releases page](https://github.com/lucastaonline/DesktopAudioBridge/releases) (no compiling needed). Maintainers: pushing a tag like `v0.1.0` builds and publishes a release automatically.
+
 ### Build
 
 Requirements: Windows, Visual Studio 2022 (C++ workload), CMake >= 3.22, Git.
@@ -78,6 +82,10 @@ Dropdown de dispositivos (saídas ativas), ganho (-60..+12 dB), mute, tamanho do
 3. Insira o DesktopAudioBridge na track da guitarra (ou no master) e escolha o dispositivo ponte no dropdown.
 
 Não roteie a saída ponte para o monitor via Windows ("Ouvir este dispositivo"), ou você ouvirá em dobro.
+
+### Download
+
+Os `.zip` com o `.vst3` pronto ficam na [página de Releases](https://github.com/lucastaonline/DesktopAudioBridge/releases) (não precisa compilar). Para mantenedores: enviar uma tag como `v0.1.0` compila e publica a release automaticamente.
 
 ### Compilar
 
